@@ -46,3 +46,25 @@ def test_missing_return_is_penalized():
     )
     assert risk["score"] < 100
     assert any("Return" in r or "return" in r for r in risk["reasons"])
+
+
+def test_replacing_print_with_logging_blocks_autofix():
+    # Heuristic fix for print_spam-style code: only a Low issue, short diff,
+    # but stdout output silently disappears. Should require human review.
+    original = "def greet(name):\n    print('Hello', name)\n    return True\n"
+    fixed = "import logging\n\ndef greet(name):\n    logging.info('Hello', name)\n    return True\n"
+    risk = assess_risk(
+        original_code=original,
+        fixed_code=fixed,
+        issues=[{"type": "Code Quality", "severity": "Low", "msg": "print"}],
+    )
+    assert risk["should_autofix"] is False
+    assert any("print()" in r for r in risk["reasons"])
+
+
+def test_removing_raise_blocks_autofix():
+    original = "def f(x):\n    if x < 0:\n        raise ValueError('neg')\n    return x\n"
+    fixed = "def f(x):\n    if x < 0:\n        return 0\n    return x\n"
+    risk = assess_risk(original_code=original, fixed_code=fixed, issues=[])
+    assert risk["should_autofix"] is False
+    assert any("raise" in r for r in risk["reasons"])

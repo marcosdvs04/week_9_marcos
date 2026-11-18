@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import re
@@ -120,7 +121,45 @@ class BugHoundAgent:
             self._log("ACT", "LLM returned empty output. Falling back to heuristic fixer.")
             return self._heuristic_fix(code_snippet, issues)
 
+        problem = self._fix_rejection_reason(code_snippet, cleaned)
+        if problem:
+            self._log("ACT", f"LLM fix rejected: {problem}. Falling back to heuristic fixer.")
+            return self._heuristic_fix(code_snippet, issues)
+
         return cleaned
+
+    # ----------------------------
+    # Fix validation guardrail
+    # ----------------------------
+    def _fix_rejection_reason(self, original: str, fixed: str) -> Optional[str]:
+        """
+        Return a reason string if an LLM-proposed fix is unusable, else None.
+
+        A usable fix must be valid Python and must keep every top-level
+        function/class from the original (the fixer should edit code, not
+        replace it with prose, a placeholder comment, or a different program).
+        """
+        try:
+            fixed_tree = ast.parse(fixed)
+        except SyntaxError:
+            return "output is not valid Python"
+
+        try:
+            original_tree = ast.parse(original)
+        except SyntaxError:
+            return None  # can't compare structure if the input itself doesn't parse
+
+        def top_level_names(tree: ast.AST) -> set:
+            return {
+                node.name
+                for node in getattr(tree, "body", [])
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            }
+
+        missing = top_level_names(original_tree) - top_level_names(fixed_tree)
+        if missing:
+            return f"definitions removed: {', '.join(sorted(missing))}"
+        return None
 
     # ----------------------------
     # Heuristic analyzer/fixer
@@ -187,18 +226,37 @@ class BugHoundAgent:
 
         return None
 
-    def _normalize_issues(self, arr: List[Any]) -> List[Dict[str, str]]:
+    def _normalize_issues(self, arr: List[Any]) -> Optional[List[Dict[str, str]]]:
+        """
+        Validate model-produced issues before the agent trusts them.
+
+        - Items that are not objects, or have no message, are dropped.
+        - Severity is matched case-insensitively to Low/Medium/High. Anything else
+          becomes "Medium" so the risk assessor cannot silently ignore it
+          (an unknown severity used to deduct 0 points).
+        - If the model returned a non-empty list but NOTHING survived validation,
+          return None so the agent falls back to heuristics instead of
+          concluding "no issues".
+        """
         issues: List[Dict[str, str]] = []
         for item in arr:
             if not isinstance(item, dict):
                 continue
+            msg = str(item.get("msg", "")).strip()
+            if not msg:
+                continue
+            severity = str(item.get("severity", "")).strip().capitalize()
+            if severity not in ("Low", "Medium", "High"):
+                severity = "Medium"
             issues.append(
                 {
                     "type": str(item.get("type", "Issue")),
-                    "severity": str(item.get("severity", "Unknown")),
-                    "msg": str(item.get("msg", "")).strip(),
+                    "severity": severity,
+                    "msg": msg,
                 }
             )
+        if arr and not issues:
+            return None
         return issues
 
     def _try_json_loads(self, s: str) -> Any:

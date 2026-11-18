@@ -1,3 +1,4 @@
+import re
 from typing import Dict, List
 
 
@@ -56,6 +57,18 @@ def assess_risk(
     if "return" in original_code and "return" not in fixed_code:
         score -= 30
         reasons.append("Return statements may have been removed.")
+
+    # Observable-behavior signal: removing print() or raise changes what the
+    # code visibly does (stdout output, or which errors propagate to callers).
+    # e.g. print -> logging.info is silent at the default WARNING level, and
+    # logging.info("Hello", name) is not equivalent to print("Hello", name).
+    if fixed_code.count("print(") < original_code.count("print("):
+        score -= 25
+        reasons.append("print() calls were removed or replaced; visible output may change.")
+
+    if len(re.findall(r"\braise\b", fixed_code)) < len(re.findall(r"\braise\b", original_code)):
+        score -= 30
+        reasons.append("raise statements were removed; error propagation may change.")
 
     if "except:" in original_code and "except:" not in fixed_code:
         # This is usually good, but still risky.

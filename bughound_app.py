@@ -4,7 +4,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from bughound_agent import BugHoundAgent
-from llm_client import GeminiClient, MockClient
+from llm_client import GeminiClient
 
 # ----------------------------
 # App setup
@@ -88,7 +88,7 @@ if mode == "Gemini (requires API key)":
 
 model_name = st.sidebar.selectbox(
     "Gemini model",
-    ["gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-2.5-pro"],
+    ["gemini-3.5-flash-lite", "gemini-3.5-flash"],
     disabled=(mode != "Gemini (requires API key)"),
 )
 
@@ -118,8 +118,12 @@ client = None
 client_status = ""
 
 if mode == "Heuristic only (no API)":
-    client = MockClient()
-    client_status = "Using MockClient. No network calls."
+    # No client at all -> the agent takes its true heuristic path and logs
+    # "Using heuristic analyzer (offline mode)". Passing MockClient here made the
+    # agent believe an LLM was available and accept MockClient's placeholder text
+    # as a "fix".
+    client = None
+    client_status = "Heuristic mode. No network calls."
 else:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
